@@ -141,6 +141,7 @@ void setup()
     if(isWifiOn == false)
     {
       vTaskSuspend(xAzureExampleHandle);
+      Serial.println("Initialed With No WIFI");
     }
 }
 // ||||||||||||||||||||||||||||||||Task Defination||||||||||||||||||||||||||||||||||||
