@@ -19,18 +19,20 @@ CRGB ledsColor = CRGB(100, 0, 0);
 int ledcycle = 0;
 
 // -----Touches-----
-#define touchOutput_pin 19
-int laststate = 1;
+#define touchOutput_SL 19
+int touchlaststate_SL = 1;
+
+#define touchOutput_RW 33
+int touchlaststate_RW = 1;
 // ----------------------Conectivity---------------------------------
 #include <WiFi.h>
 #include <WebServer.h>
-#include "Pages.h"       // The wifi setting page
-
+#include "Pages.h" // The wifi setting page
 
 WebServer server(80);
 // Wifi_setter.h needs to be include after WebServer server(80)
 // because it has dependency on it
-#include "Wifi_setter.h" 
+#include "Wifi_setter.h"
 
 #include "AzureIotHub.h"
 #include "Esp32MQTTClient.h"
@@ -43,8 +45,8 @@ WebServer server(80);
 bool isWifiOn = false;
 
 // Please input the SSID and password of WiFi
-char ssid[100];
-char password[100];
+char ssid[50];
+char password[50];
 
 /*String containing Hostname, Device Id & Device Key in the format:                         */
 /*  "HostName=<host_name>;DeviceId=<device_id>;SharedAccessKey=<device_key>"                */
@@ -57,7 +59,6 @@ int messageCount = 1;
 static bool hasWifi = false;
 static bool messageSending = true;
 static uint64_t send_interval_ms;
-//|||||||||||||||||||||||||||||||Conectivity|||||||||||||||||||||||||||||||
 
 // --------------------------Queues Declaration------------------------------
 QueueHandle_t xq_to_xTaskLED;
@@ -65,8 +66,9 @@ QueueHandle_t xq_to_xTaskLED;
 // --------------------------Task Declaration------------------------------
 void xTaskAzureExample(void *pvParameters);
 void xTaskLED(void *pvParameters);
-void xTaskTouchButton(void *pvParameters);
-// |||||||||||||||||||||||||||||||Task Declaration|||||||||||||||||||||||||||||||
+void xTaskTouchButtonSwitchLed(void *pvParameters);
+// --------------------------Task Declaration------------------------------
+TimerHandle_t xTimer_ResetWifiInfoTimer;
 
 // the setup function runs once when you press reset or power the board
 void setup()
@@ -84,9 +86,10 @@ void setup()
   FastLED.show();
 
   // touchbutton
-  pinMode(touchOutput_pin, INPUT);
+  pinMode(touchOutput_SL, INPUT);
+  pinMode(touchOutput_RW, INPUT);
 
-  delay(3000);
+  delay(300);
 
   // Check Wifi bypass pin
   pinMode(WIFI_BYPASS_PIN, INPUT);
@@ -110,10 +113,8 @@ void setup()
     // copy the info from eeporom to our char array using help of strcpy and c_str
     strcpy(ssid, s.c_str());
     strcpy(password, p.c_str());
-    
-    
+
     Serial.println("Successfully set wifi info from eeprom");
-   
 
     delay(2000);
   }
@@ -125,7 +126,7 @@ void setup()
     hasWifi = false;
 
     InitWifi();
-    
+
     if (!hasWifi)
     {
       return;
@@ -143,14 +144,22 @@ void setup()
 
     send_interval_ms = millis();
   }
-  // ||||||||||||||||||||||||||Manual Setup|||||||||||||||||||||||||||||||
   // --------------------------Queues Defination----------------------------
   xq_to_xTaskLED = xQueueCreate(1, 8);
   // --------------------------Task Handle----------------------------------
   TaskHandle_t xAzureExampleHandle;
   // --------------------------Task Defination------------------------------
   xTaskCreatePinnedToCore(
-      xTaskTouchButton, "TaskTouchButton" // A name just for humans
+      xTaskTouchButtonSwitchLed, "TaskTouchButtonSwitchLed" // A name just for humans
+      ,
+      1024 // This stack size can be checked & adjusted by reading the Stack Highwater
+      ,
+      NULL, 2 // Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest.
+      ,
+      NULL, ARDUINO_RUNNING_CORE);
+
+  xTaskCreatePinnedToCore(
+      xTaskTouchButtonResetWifi, "TaskTouchButtonResetWifi" // A name just for humans
       ,
       1024 // This stack size can be checked & adjusted by reading the Stack Highwater
       ,
@@ -197,6 +206,15 @@ static void InitWifi()
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
+}
+
+void WipeWifiInfoInEEPROM()
+{
+  for (int i = 0; i < 400; i++)
+  {
+    EEPROM.writeByte(i, 0);
+  }
+  EEPROM.commit();
 }
 // |||||||||||||||||||||||||||Normal Function|||||||||||||||||||||||||
 // --------------------------Callback Function------------------------------
@@ -257,6 +275,15 @@ static void DeviceTwinCallback(DEVICE_TWIN_UPDATE_STATE updateState, const unsig
   free(temp);
 }
 
+void vTimerCallback_ResetWifiInfo(TimerHandle_t xTimer)
+{
+  WipeWifiInfoInEEPROM();
+  delay(500);
+  Serial.println("WifiResetted, Restarting Esp32");
+  delay(500);
+  ESP.restart();
+}
+
 // |||||||||||||||||||||||||||Callback Function|||||||||||||||||||||||||
 // --------------------------Tasks Function------------------------------
 void loop()
@@ -271,17 +298,17 @@ void xTaskDealCommand(void *pvParameters)
   for (;;)
   {
 
-    vTaskDelay(20);
+    vTaskDelay(2000);
   }
 }
 
-void xTaskTouchButton(void *pvParameters)
+void xTaskTouchButtonSwitchLed(void *pvParameters)
 {
   uint8_t send_led_color[3] = {0};
 
   for (;;)
   {
-    if (digitalRead(touchOutput_pin) == LOW && laststate == 1)
+    if (digitalRead(touchOutput_SL) == LOW && touchlaststate_SL == 1)
     {
       ledcycle++;
       if (ledcycle >= 3)
@@ -310,13 +337,53 @@ void xTaskTouchButton(void *pvParameters)
         Serial.println("sent color to leds");
       }
 
-      laststate = 0;
+      touchlaststate_SL = 0;
     }
-    else if (digitalRead(touchOutput_pin) == HIGH && laststate == 0)
+    else if (digitalRead(touchOutput_SL) == HIGH && touchlaststate_SL == 0)
     {
-      laststate = 1;
+      touchlaststate_SL = 1;
     }
 
+    vTaskDelay(20);
+  }
+}
+
+void xTaskTouchButtonResetWifi(void *pvParameters)
+{
+
+  for (;;)
+  {
+    if (digitalRead(touchOutput_RW) == HIGH && touchlaststate_RW == 1)
+    {
+      touchlaststate_RW = 0;
+      xTimer_ResetWifiInfoTimer = xTimerCreate("ResetWifiInfoTimer",
+                                               pdMS_TO_TICKS(5000),
+                                               false,
+                                               (void *)0,
+                                               vTimerCallback_ResetWifiInfo);
+
+      xTimerStart(xTimer_ResetWifiInfoTimer, 0);
+      Serial.println("Reset buttone pressed, hold for 5 seconds.");
+    }
+
+    else if (digitalRead(touchOutput_RW) == LOW && touchlaststate_RW == 0)
+    {
+      touchlaststate_RW = 1;
+
+      if (xTimer_ResetWifiInfoTimer != NULL)
+      {
+        if (xTimerIsTimerActive(xTimer_ResetWifiInfoTimer) == pdTRUE)
+        {
+          xTimerStop(xTimer_ResetWifiInfoTimer, 0);
+          Serial.println("Reset button released, cancel reset");
+        }
+        else
+        {
+          Serial.println("Reset button released");
+        }
+      }
+
+    }
     vTaskDelay(20);
   }
 }
@@ -338,6 +405,8 @@ void xTaskLED(void *pvParameters) // This is a task.
       FastLED.show();
       vTaskDelay(20);
     }
+
+    vTaskDelay(5);
   }
 }
 

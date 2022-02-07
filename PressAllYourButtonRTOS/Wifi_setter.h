@@ -84,7 +84,7 @@ bool loadWIFICredsForm(){
   String s = EEPROM.readString(100);
   String p = EEPROM.readString(200);
 
-  IPAddress IP = {10, 10, 1, 1}; // I don;t know why this one needs curly braces
+  IPAddress IP = {10, 69, 4, 20}; // I don;t know why this one needs curly braces
   IPAddress gateway = (10, 10, 1, 1);
   IPAddress NMask = (255, 255, 255, 0);
 
@@ -130,7 +130,8 @@ bool CheckWIFICreds(){
   Serial.print(s);
   Serial.print("/");
   Serial.print(p);
-  delay(5000);
+  Serial.println("");
+  delay(3000);
   //#endif
   if(s.length() > 0 && p.length() > 0){
     return true;
